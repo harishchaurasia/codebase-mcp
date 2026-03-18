@@ -184,3 +184,54 @@ class FileSuggestion(BaseModel):
         default_factory=list,
         description="Files tightly coupled to this one (deps + dependents)",
     )
+
+
+# ---------------------------------------------------------------------------
+# Memory layer models
+# ---------------------------------------------------------------------------
+
+
+class FileFingerprint(BaseModel):
+    """Lightweight file identity for change detection (no content read needed)."""
+
+    path: str
+    mtime: float
+    size_bytes: int
+
+
+class DetectedPattern(BaseModel):
+    """A codebase pattern detected by heuristic analysis."""
+
+    name: str = Field(description="e.g. 'fastapi', 'pytest', 'monorepo'")
+    category: str = Field(description="'framework', 'testing', 'structure', 'build'")
+    confidence: float = Field(ge=0.0, le=1.0)
+    evidence: list[str] = Field(
+        default_factory=list,
+        description="Files or imports that triggered this detection",
+    )
+
+
+class ScanDiff(BaseModel):
+    """Result of comparing cached fingerprints against the current filesystem."""
+
+    added: list[str] = Field(default_factory=list)
+    changed: list[str] = Field(default_factory=list)
+    removed: list[str] = Field(default_factory=list)
+    unchanged: list[str] = Field(default_factory=list)
+
+    @property
+    def has_changes(self) -> bool:
+        return bool(self.added or self.changed or self.removed)
+
+
+class RepoMemory(BaseModel):
+    """Complete persistent memory object for an analyzed repository."""
+
+    version: str = "1"
+    root_path: str
+    analyzed_at: str = Field(description="ISO-8601 timestamp of last analysis")
+    fingerprints: dict[str, FileFingerprint] = Field(default_factory=dict)
+    analyses: dict[str, FileAnalysis] = Field(default_factory=dict)
+    graph: DependencyGraph = Field(default_factory=lambda: DependencyGraph(nodes=[], edges=[]))
+    summary: ArchitectureSummary | None = None
+    patterns: list[DetectedPattern] = Field(default_factory=list)

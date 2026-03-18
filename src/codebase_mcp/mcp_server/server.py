@@ -33,16 +33,18 @@ def get_registry() -> ToolRegistry:
 
 
 @mcp.tool()
-def analyze_repo(directory: str) -> dict:
+def analyze_repo(directory: str, force: bool = False) -> dict:
     """Scan and analyze a local codebase directory.
 
     This must be called before using any other tool.  It walks the directory,
     parses source files, builds a dependency graph, and caches the results.
+    Uses persistent memory to skip unchanged files on re-analysis.
 
     Args:
         directory: Absolute path to the codebase root directory.
+        force: If True, ignore the cache and do a full rescan (default False).
     """
-    result = get_registry().execute("analyze_repo", directory=directory)
+    result = get_registry().execute("analyze_repo", directory=directory, force=force)
     return result.model_dump()
 
 
@@ -83,6 +85,22 @@ def suggest_files_for_task(task_description: str, top_n: int = 5) -> dict:
     result = get_registry().execute(
         "suggest_files_for_task", task_description=task_description, top_n=top_n,
     )
+    return result.model_dump()
+
+
+# ---------------------------------------------------------------------------
+# Memory / cache tools
+# ---------------------------------------------------------------------------
+
+
+@mcp.tool()
+def get_memory_status() -> dict:
+    """Check the analysis cache: loaded state, staleness, and detected patterns.
+
+    Returns whether memory is loaded, when the last analysis was performed,
+    how many files are cached, detected codebase patterns, and a staleness check.
+    """
+    result = get_registry().execute("get_memory_status")
     return result.model_dump()
 
 

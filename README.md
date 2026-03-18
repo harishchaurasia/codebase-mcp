@@ -16,24 +16,30 @@ MCP Transport (stdio / HTTP)
   │  explain_file                  │
   │  find_codebase_references      │
   │  suggest_files_for_task        │
+  │  get_memory_status             │
   └────────────────────────────────┘
         │
-  CodebaseAnalyzer   ← orchestrator (scan → AST → deps → search)
+  CodebaseAnalyzer   ← orchestrator (scan → AST → deps → memory)
         │
   ┌─────┴──────────────────────────┐
   │  scanner · ast_analyzer        │
   │  dependency · summarizer       │
-  │  search                        │
+  │  search · patterns             │
   └────────────────────────────────┘
+        │
+  MemoryStore        ← persistent cache (JSON on disk)
 ```
 
 **Key design principle:** the MCP layer is a thin shell. All tool logic lives in `tools/`, all analysis logic lives in `analyzers/`, and the registry can be used directly by any agent loop -- no MCP transport required.
 
 ## Features
 
+- **Persistent memory** -- analysis results are cached to disk as JSON; re-analysis only touches changed/added files
+- **Pattern detection** -- heuristic detection of frameworks (FastAPI, Django, Flask, ...), test tools, build systems, and structural patterns (monorepo, CI, Docker)
 - **Agentic tool system** -- every tool carries metadata (description, trigger keywords, usage examples, capabilities) that agents use for tool selection
 - **Tool registry** -- dynamic discovery, name-based dispatch, and keyword routing
 - **Meta-tools** -- `list_tools` and `route_query` let agents introspect the system
+- **Memory status** -- `get_memory_status` reports cache state, staleness, and detected patterns
 - **Dependency-aware suggestions** -- `suggest_files_for_task` enriches search results with the dependency neighbourhood
 - **AST analysis** -- extracts classes, functions, variables, imports, and docstrings from Python files
 - **Architecture summary** -- language breakdown, top modules, entry points, most-imported files
@@ -111,10 +117,11 @@ Add to `.cursor/mcp.json`:
 
 | Tool | Description |
 |------|-------------|
-| `analyze_repo(directory)` | Scan and analyze a directory. **Call this first.** |
+| `analyze_repo(directory, force)` | Scan and analyze a directory. Uses cached memory when available. Pass `force=True` to rescan. **Call this first.** |
 | `explain_file(file_path)` | Symbols, docstring, imports, and dependents |
 | `find_codebase_references(query, top_n)` | Keyword search for relevant files |
 | `suggest_files_for_task(task_description, top_n)` | Dependency-aware file suggestions |
+| `get_memory_status()` | Cache state, staleness, and detected patterns |
 
 ### Meta-tools (agent introspection)
 
@@ -145,23 +152,26 @@ src/codebase_mcp/
 │   ├── base.py             # BaseTool, ToolMetadata, ToolResult
 │   ├── registry.py         # ToolRegistry (discover, route, execute)
 │   ├── _context.py         # Shared analyzer singleton
-│   ├── analyze_repo.py     # AnalyzeRepoTool
+│   ├── analyze_repo.py     # AnalyzeRepoTool (with force/cache support)
 │   ├── explain_file.py     # ExplainFileTool
 │   ├── find_references.py  # FindCodebaseReferencesTool
-│   └── suggest_files.py    # SuggestFilesForTaskTool
+│   ├── suggest_files.py    # SuggestFilesForTaskTool
+│   └── memory_status.py    # MemoryStatusTool
 ├── mcp_server/
 │   └── server.py           # Thin MCP shell (auto-registers from registry)
 ├── core/
-│   ├── codebase.py         # Orchestrator
-│   └── config.py           # pydantic-settings
+│   ├── codebase.py         # Orchestrator (memory-aware analysis)
+│   ├── config.py           # pydantic-settings
+│   └── memory.py           # MemoryStore (save/load/fingerprint/diff)
 ├── analyzers/
 │   ├── scanner.py          # .gitignore-aware file walker
 │   ├── ast_analyzer.py     # Python AST parser
 │   ├── dependency.py       # Import graph builder
 │   ├── summarizer.py       # Architecture summary
-│   └── search.py           # TF-IDF keyword search
+│   ├── search.py           # TF-IDF keyword search
+│   └── patterns.py         # Heuristic pattern detection
 ├── schemas/
-│   └── models.py           # Pydantic data models + tool I/O types
+│   └── models.py           # Pydantic data models + memory models
 └── utils/
     ├── logging.py          # structlog configuration
     └── file_utils.py       # File I/O, language detection
@@ -170,7 +180,7 @@ src/codebase_mcp/
 ## Development
 
 ```bash
-# Run tests (45 tests)
+# Run tests (63 tests)
 python -m pytest tests/ -v
 
 # Lint

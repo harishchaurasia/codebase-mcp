@@ -33,6 +33,11 @@ class Settings(BaseSettings):
         default_factory=lambda: ["*.pyc", "*.pyo", "*.so", "*.dylib"],
         description="Glob patterns for files to exclude from analysis",
     )
+    memory_dir: str | None = Field(
+        default=None,
+        description="Directory for memory cache files. "
+        "If None, stores inside the analyzed repo at .codebase-mcp/",
+    )
 
 
 def get_settings() -> Settings:
