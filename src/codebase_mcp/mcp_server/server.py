@@ -68,6 +68,11 @@ def explain_file(file_path: str) -> dict:
 def find_codebase_references(query: str, top_n: int = 10) -> dict:
     """Find files most relevant to a natural-language query or feature description.
 
+    Uses a three-stage pipeline (select → evaluate → refine) that returns
+    results enriched with per-signal match breakdowns (keyword, symbol, path,
+    docstring, dependency boost), structured reasoning traces explaining why
+    each file was selected, and a confidence score (0.0-1.0).
+
     Args:
         query: What you are looking for (e.g. "authentication middleware").
         top_n: Maximum number of results to return (default 10).

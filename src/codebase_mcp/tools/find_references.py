@@ -1,4 +1,4 @@
-"""Tool: find_codebase_references -- keyword search for relevant files."""
+"""Tool: find_codebase_references -- multi-stage search for relevant files."""
 
 from __future__ import annotations
 
@@ -8,8 +8,8 @@ from codebase_mcp.tools.base import BaseTool, ToolMetadata, ToolResult
 
 
 class FindCodebaseReferencesTool(BaseTool):
-    """Searches the analyzed codebase for files relevant to a natural-language
-    query using keyword-based TF-IDF scoring over paths, symbols, and docstrings."""
+    """Searches the analyzed codebase using a three-stage pipeline
+    (select → evaluate → refine) with per-result reasoning and confidence."""
 
     @property
     def metadata(self) -> ToolMetadata:
@@ -17,18 +17,21 @@ class FindCodebaseReferencesTool(BaseTool):
             name="find_codebase_references",
             description=(
                 "Find files in the codebase most relevant to a natural-language query "
-                "or feature description.  Uses keyword scoring over file paths, symbol "
-                "names, and docstrings.  Returns ranked results with context."
+                "or feature description.  Uses a select → evaluate → refine pipeline "
+                "with per-signal score breakdowns, dependency-aware re-ranking, "
+                "reasoning traces, and confidence scores."
             ),
             trigger_keywords=[
                 "find", "search", "references", "relevant", "files",
                 "where", "locate", "lookup", "grep", "query",
+                "evaluate", "refine", "confidence", "reasoning", "why",
             ],
             usage_examples=[
                 'find_codebase_references(query="authentication middleware", top_n=5)',
                 "Which files deal with payment processing?",
+                "Why was this file selected as relevant?",
             ],
-            capabilities=["search", "discovery"],
+            capabilities=["search", "discovery", "reasoning"],
         )
 
     def execute(self, **kwargs: Any) -> ToolResult:

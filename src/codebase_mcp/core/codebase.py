@@ -8,7 +8,7 @@ from codebase_mcp.analyzers.ast_analyzer import analyze_file
 from codebase_mcp.analyzers.dependency import build_dependency_graph
 from codebase_mcp.analyzers.patterns import detect_patterns
 from codebase_mcp.analyzers.scanner import scan_directory
-from codebase_mcp.analyzers.search import find_relevant
+from codebase_mcp.analyzers.search import find_relevant, find_relevant_refined
 from codebase_mcp.analyzers.summarizer import summarize_architecture
 from codebase_mcp.core.config import Settings
 from codebase_mcp.core.memory import MemoryStore
@@ -22,9 +22,9 @@ from codebase_mcp.schemas.models import (
     FileFingerprint,
     FileSuggestion,
     ReasoningStep,
+    RefinedSearchResult,
     RepoMemory,
     ScanDiff,
-    SearchResult,
     SymbolSummary,
 )
 from codebase_mcp.utils.logging import get_logger
@@ -201,9 +201,57 @@ class CodebaseAnalyzer:
         assert self._summary is not None
         return self._summary
 
-    def find_relevant_files(self, query: str, top_n: int = 10) -> list[SearchResult]:
+    def find_relevant_files(
+        self, query: str, top_n: int = 10,
+    ) -> list[RefinedSearchResult]:
+        """Three-stage pipeline: select candidates, evaluate, refine with deps."""
         self._ensure_loaded()
-        return find_relevant(query, list(self._analyses_by_path.values()), top_n=top_n)
+        assert self._graph is not None
+        analyses = list(self._analyses_by_path.values())
+        candidates = find_relevant_refined(query, analyses, top_n=top_n)
+        return self._refine_with_dependencies(candidates)
+
+    def _refine_with_dependencies(
+        self, results: list[RefinedSearchResult],
+    ) -> list[RefinedSearchResult]:
+        """Stage 3: boost results based on dependency relationships."""
+        assert self._graph is not None
+
+        result_paths = {r.file_path for r in results}
+        key_files = set(self._summary.key_files) if self._summary else set()
+
+        for r in results:
+            boost = 0.0
+
+            dependents = self._graph.get_dependents(r.file_path)
+            imported_by_results = [
+                e.source for e in dependents if e.source in result_paths
+            ]
+            if imported_by_results:
+                dep_boost = len(imported_by_results) * 0.5
+                boost += dep_boost
+                r.reasoning.append(ReasoningStep(
+                    observation="Imported by other results in this set",
+                    evidence=(
+                        f"{len(imported_by_results)} result(s): "
+                        f"{', '.join(imported_by_results[:3])}"
+                    ),
+                ))
+
+            if r.file_path in key_files:
+                boost += 0.3
+                r.reasoning.append(ReasoningStep(
+                    observation="File is a key file (high in-degree)",
+                    evidence=r.file_path,
+                ))
+
+            if boost > 0:
+                r.match_breakdown.dependency_boost = round(boost, 4)
+                r.score = round(r.score + boost, 4)
+
+        results.sort(key=lambda r: r.score, reverse=True)
+        _reassign_confidence(results)
+        return results
 
     def explain_file(self, file_path: str) -> FileExplanation | None:
         self._ensure_loaded()
@@ -352,6 +400,22 @@ class CodebaseAnalyzer:
             raise RuntimeError(
                 "No codebase loaded. Call 'analyze_repo' first with a directory path."
             )
+
+
+# ---------------------------------------------------------------------------
+# Confidence re-normalization (used by _refine_with_dependencies)
+# ---------------------------------------------------------------------------
+
+
+def _reassign_confidence(results: list[RefinedSearchResult]) -> None:
+    """Re-normalize confidence so the top result is 1.0."""
+    if not results:
+        return
+    max_score = results[0].score
+    if max_score <= 0:
+        return
+    for r in results:
+        r.confidence = round(min(1.0, r.score / max_score), 4)
 
 
 # ---------------------------------------------------------------------------

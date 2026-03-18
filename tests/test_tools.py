@@ -52,8 +52,23 @@ def test_find_codebase_references_tool(tmp_codebase: Path) -> None:
     reg.execute("analyze_repo", directory=str(tmp_codebase))
     result = reg.execute("find_codebase_references", query="helper function")
     assert result.success
-    paths = [r["file_path"] for r in result.data["results"]]
+    results = result.data["results"]
+    paths = [r["file_path"] for r in results]
     assert "mypackage/utils.py" in paths
+
+    top = results[0]
+    assert "confidence" in top
+    assert 0.0 <= top["confidence"] <= 1.0
+    assert "reasoning" in top
+    assert isinstance(top["reasoning"], list)
+    assert len(top["reasoning"]) > 0
+    assert "match_breakdown" in top
+    bd = top["match_breakdown"]
+    assert "keyword_score" in bd
+    assert "symbol_score" in bd
+    assert "path_score" in bd
+    assert "docstring_score" in bd
+    assert "dependency_boost" in bd
 
 
 def test_find_codebase_references_empty(tmp_codebase: Path) -> None:
@@ -125,3 +140,19 @@ def test_suggest_files_includes_related(tmp_codebase: Path) -> None:
         if s["file_path"] == "mypackage/utils.py":
             assert len(s["related_files"]) > 0
             break
+
+
+def test_dependency_boost(tmp_codebase: Path) -> None:
+    """utils.py is imported by both main.py and module_a.py.
+
+    When both appear in results, utils.py should receive a dependency_boost.
+    """
+    reg = _fresh_registry()
+    reg.execute("analyze_repo", directory=str(tmp_codebase))
+    result = reg.execute("find_codebase_references", query="helper")
+    assert result.success
+
+    by_path = {r["file_path"]: r for r in result.data["results"]}
+    assert "mypackage/utils.py" in by_path
+    utils_result = by_path["mypackage/utils.py"]
+    assert utils_result["match_breakdown"]["dependency_boost"] > 0

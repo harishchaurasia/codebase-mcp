@@ -132,12 +132,37 @@ class ArchitectureSummary(BaseModel):
 
 
 class SearchResult(BaseModel):
-    """A file matching a search query, ranked by relevance."""
+    """A file matching a search query, ranked by relevance (raw pipeline output)."""
 
     file_path: str
     score: float = Field(ge=0.0)
     matched_symbols: list[str] = Field(default_factory=list)
     context: str = Field(default="", description="Snippet or summary of why this matched")
+
+
+class MatchBreakdown(BaseModel):
+    """Per-signal score breakdown for a search result."""
+
+    keyword_score: float = 0.0
+    symbol_score: float = 0.0
+    path_score: float = 0.0
+    docstring_score: float = 0.0
+    dependency_boost: float = 0.0
+
+
+class RefinedSearchResult(BaseModel):
+    """Search result enriched with reasoning, confidence, and score breakdown."""
+
+    file_path: str
+    score: float = Field(ge=0.0)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    matched_symbols: list[str] = Field(default_factory=list)
+    context: str = Field(default="")
+    reasoning: list[ReasoningStep] = Field(
+        default_factory=list,
+        description="Why this result was selected",
+    )
+    match_breakdown: MatchBreakdown = Field(default_factory=MatchBreakdown)
 
 
 # ---------------------------------------------------------------------------

@@ -57,8 +57,18 @@ def test_find_codebase_references(tmp_codebase: Path) -> None:
     analyze_repo(str(tmp_codebase))
     result = find_codebase_references("helper function")
     assert result["success"]
-    paths = [r["file_path"] for r in result["data"]["results"]]
+    results = result["data"]["results"]
+    paths = [r["file_path"] for r in results]
     assert "mypackage/utils.py" in paths
+
+    top = results[0]
+    assert 0.0 <= top["confidence"] <= 1.0
+    assert isinstance(top["reasoning"], list)
+    assert len(top["reasoning"]) > 0
+    assert "match_breakdown" in top
+    bd = top["match_breakdown"]
+    assert "keyword_score" in bd
+    assert "dependency_boost" in bd
 
 
 def test_suggest_files_for_task(tmp_codebase: Path) -> None:
