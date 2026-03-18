@@ -50,7 +50,12 @@ def analyze_repo(directory: str, force: bool = False) -> dict:
 
 @mcp.tool()
 def explain_file(file_path: str) -> dict:
-    """Explain what a specific file does: its purpose, symbols, and relationships.
+    """Explain what a specific file does with structured reasoning.
+
+    Returns the file's high-level purpose, classified role (entry_point,
+    utility, core_logic, test, model, api, config, etc.), key symbols,
+    dependencies, a confidence score, suggested next files to examine, and
+    a reasoning trace showing how the explanation was derived.
 
     Args:
         file_path: Relative path of the file (as shown in analysis output).

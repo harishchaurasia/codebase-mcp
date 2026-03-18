@@ -16,19 +16,22 @@ class ExplainFileTool(BaseTool):
         return ToolMetadata(
             name="explain_file",
             description=(
-                "Explain what a specific file does: its module docstring, the classes "
-                "and functions it defines, what it imports, and which other files depend "
-                "on it.  Useful for understanding a file before editing it."
+                "Explain what a specific file does with structured reasoning: its "
+                "high-level purpose, classified role in the system, key symbols, "
+                "dependencies, a confidence score, and suggested next files to examine. "
+                "Includes a reasoning trace showing how the explanation was derived."
             ),
             trigger_keywords=[
                 "explain", "describe", "file", "purpose", "what does",
-                "symbols", "overview", "understand",
+                "symbols", "overview", "understand", "reasoning", "role",
+                "confidence", "next",
             ],
             usage_examples=[
                 'explain_file(file_path="src/auth/middleware.py")',
                 "What does the file utils/helpers.py do?",
+                "What is the role of server.py in the system?",
             ],
-            capabilities=["explanation", "analysis"],
+            capabilities=["explanation", "analysis", "reasoning"],
         )
 
     def execute(self, **kwargs: Any) -> ToolResult:

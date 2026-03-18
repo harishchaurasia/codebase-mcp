@@ -154,8 +154,15 @@ class SymbolSummary(BaseModel):
     docstring: str | None = None
 
 
+class ReasoningStep(BaseModel):
+    """A single observation in a structured reasoning trace."""
+
+    observation: str
+    evidence: str
+
+
 class FileExplanation(BaseModel):
-    """Structured explanation of a single file's role and contents."""
+    """Structured explanation of a single file's role, contents, and reasoning."""
 
     path: str
     language: str
@@ -164,6 +171,26 @@ class FileExplanation(BaseModel):
     symbols: list[SymbolSummary] = Field(default_factory=list)
     imports_from: list[str] = Field(default_factory=list)
     imported_by: list[str] = Field(default_factory=list)
+    purpose: str = Field(default="", description="Heuristic one-line purpose summary")
+    role: str = Field(
+        default="unknown",
+        description="Classified role: entry_point, utility, core_logic, test, "
+        "test_fixture, config, model, api, or unknown",
+    )
+    next_files: list[str] = Field(
+        default_factory=list,
+        description="Files the agent should examine next",
+    )
+    reasoning: list[ReasoningStep] = Field(
+        default_factory=list,
+        description="Structured trace of how the explanation was derived",
+    )
+    confidence: float = Field(
+        default=0.0,
+        ge=0.0,
+        le=1.0,
+        description="How confident we are in this explanation (0.0-1.0)",
+    )
 
 
 class FileDependencyInfo(BaseModel):

@@ -21,6 +21,7 @@ from codebase_mcp.schemas.models import (
     FileExplanation,
     FileFingerprint,
     FileSuggestion,
+    ReasoningStep,
     RepoMemory,
     ScanDiff,
     SearchResult,
@@ -214,23 +215,40 @@ class CodebaseAnalyzer:
 
         deps = self._graph.get_dependencies(file_path)
         dependents = self._graph.get_dependents(file_path)
+        reasoning: list[ReasoningStep] = []
+
+        symbols = [
+            SymbolSummary(
+                name=s.name,
+                kind=s.kind.value,
+                line=s.line_number,
+                docstring=s.docstring,
+            )
+            for s in analysis.symbols
+        ]
+        imports_from = [e.target for e in deps]
+        imported_by = [e.source for e in dependents]
+
+        role = _classify_role(file_path, analysis, len(dependents), reasoning)
+        purpose = _derive_purpose(file_path, analysis, role, reasoning)
+        next_files = _rank_next_files(
+            file_path, deps, dependents, self._analyses_by_path, reasoning,
+        )
+        confidence = _compute_confidence(analysis, deps, dependents, role, reasoning)
 
         return FileExplanation(
             path=analysis.info.path,
             language=analysis.info.language.value,
             lines=analysis.info.line_count,
             module_docstring=analysis.module_docstring,
-            symbols=[
-                SymbolSummary(
-                    name=s.name,
-                    kind=s.kind.value,
-                    line=s.line_number,
-                    docstring=s.docstring,
-                )
-                for s in analysis.symbols
-            ],
-            imports_from=[e.target for e in deps],
-            imported_by=[e.source for e in dependents],
+            symbols=symbols,
+            imports_from=imports_from,
+            imported_by=imported_by,
+            purpose=purpose,
+            role=role,
+            next_files=next_files,
+            reasoning=reasoning,
+            confidence=confidence,
         )
 
     def get_file_dependencies(self, file_path: str) -> FileDependencyInfo:
@@ -334,3 +352,209 @@ class CodebaseAnalyzer:
             raise RuntimeError(
                 "No codebase loaded. Call 'analyze_repo' first with a directory path."
             )
+
+
+# ---------------------------------------------------------------------------
+# Heuristic reasoning helpers (module-level, used by explain_file)
+# ---------------------------------------------------------------------------
+
+_ENTRY_POINT_NAMES = frozenset({
+    "__main__.py", "main.py", "app.py", "server.py", "cli.py",
+    "manage.py", "wsgi.py", "asgi.py",
+})
+
+_ROLE_PATH_PATTERNS: list[tuple[list[str], str]] = [
+    (["models", "schemas", "types"], "model"),
+    (["utils", "helpers", "lib"], "utility"),
+    (["api", "routes", "views", "endpoints", "handlers"], "api"),
+    (["config", "settings"], "config"),
+    (["middleware"], "api"),
+]
+
+
+def _classify_role(
+    file_path: str,
+    analysis: FileAnalysis,
+    dependent_count: int,
+    reasoning: list[ReasoningStep],
+) -> str:
+    """Classify a file's role from filename, path, and symbol patterns."""
+    p = Path(file_path)
+    name = p.name
+    parts = {part.lower() for part in p.parts}
+
+    # Test files
+    if name.startswith("test_") or name.endswith("_test.py"):
+        reasoning.append(ReasoningStep(
+            observation="Filename matches test pattern",
+            evidence=name,
+        ))
+        return "test"
+    if name == "conftest.py":
+        reasoning.append(ReasoningStep(
+            observation="Filename is conftest.py (pytest fixture file)",
+            evidence=name,
+        ))
+        return "test_fixture"
+
+    # Entry points
+    if name in _ENTRY_POINT_NAMES:
+        reasoning.append(ReasoningStep(
+            observation="Filename matches entry-point convention",
+            evidence=name,
+        ))
+        return "entry_point"
+
+    # Path-based patterns
+    for keywords, role in _ROLE_PATH_PATTERNS:
+        for kw in keywords:
+            if kw in parts or kw in name.lower():
+                reasoning.append(ReasoningStep(
+                    observation=f"Path contains '{kw}' pattern",
+                    evidence=file_path,
+                ))
+                return role
+
+    # Symbol-based: if every class inherits BaseModel -> model
+    classes = [s for s in analysis.symbols if s.kind == "class"]
+    if classes:
+        basemodel_imports = any(
+            "BaseModel" in imp.names or imp.module in ("pydantic", "pydantic.main")
+            for imp in analysis.imports
+        )
+        if basemodel_imports and len(classes) == len([
+            s for s in analysis.symbols if s.kind == "class"
+        ]):
+            reasoning.append(ReasoningStep(
+                observation="File defines Pydantic BaseModel classes",
+                evidence=", ".join(c.name for c in classes),
+            ))
+            return "model"
+
+    # High in-degree -> core logic
+    if dependent_count >= 3:
+        reasoning.append(ReasoningStep(
+            observation=f"High in-degree: {dependent_count} files depend on this",
+            evidence=f"{dependent_count} dependents",
+        ))
+        return "core_logic"
+
+    # Init files
+    if name == "__init__.py":
+        reasoning.append(ReasoningStep(
+            observation="Package init file",
+            evidence=name,
+        ))
+        return "config"
+
+    reasoning.append(ReasoningStep(
+        observation="No strong role signal detected",
+        evidence="defaulting to unknown",
+    ))
+    return "unknown"
+
+
+def _derive_purpose(
+    file_path: str,
+    analysis: FileAnalysis,
+    role: str,
+    reasoning: list[ReasoningStep],
+) -> str:
+    """Derive a one-line purpose from the docstring or heuristics."""
+    if analysis.module_docstring:
+        first_sentence = analysis.module_docstring.strip().split("\n")[0].rstrip(".")
+        reasoning.append(ReasoningStep(
+            observation="Module docstring found",
+            evidence=first_sentence[:80],
+        ))
+        return first_sentence
+
+    # Fall back to symbol-based heuristics
+    def _kind(s: object) -> str:
+        k = s.kind  # type: ignore[attr-defined]
+        return k.value if hasattr(k, "value") else k
+
+    functions = [s for s in analysis.symbols if _kind(s) == "function"]
+    classes = [s for s in analysis.symbols if _kind(s) == "class"]
+
+    if classes and not functions:
+        names = ", ".join(c.name for c in classes[:3])
+        purpose = f"Defines {len(classes)} class(es): {names}"
+    elif functions and not classes:
+        names = ", ".join(f.name for f in functions[:3])
+        purpose = f"Defines {len(functions)} function(s): {names}"
+    elif functions and classes:
+        purpose = (
+            f"Defines {len(classes)} class(es) and "
+            f"{len(functions)} function(s)"
+        )
+    elif role != "unknown":
+        purpose = f"Acts as {role.replace('_', ' ')} ({Path(file_path).name})"
+    else:
+        lang = analysis.info.language.value
+        lines = analysis.info.line_count
+        purpose = f"{Path(file_path).name} ({lang}, {lines} lines)"
+
+    reasoning.append(ReasoningStep(
+        observation="Purpose derived from symbol analysis",
+        evidence=purpose[:80],
+    ))
+    return purpose
+
+
+def _rank_next_files(
+    file_path: str,
+    deps: list,
+    dependents: list,
+    analyses_by_path: dict[str, FileAnalysis],
+    reasoning: list[ReasoningStep],
+) -> list[str]:
+    """Rank files the agent should examine next (up to 5)."""
+    scored: dict[str, float] = {}
+
+    # Dependents (files that import this one) -- high priority
+    for edge in dependents:
+        scored[edge.source] = scored.get(edge.source, 0) + 3.0
+
+    # Dependencies (files this one imports) -- medium priority
+    for edge in deps:
+        scored[edge.target] = scored.get(edge.target, 0) + 2.0
+
+    # Siblings (same directory) -- low priority
+    parent = str(Path(file_path).parent)
+    for path in analyses_by_path:
+        if path != file_path and str(Path(path).parent) == parent:
+            scored[path] = scored.get(path, 0) + 1.0
+
+    # Remove self
+    scored.pop(file_path, None)
+
+    ranked = sorted(scored, key=lambda p: scored[p], reverse=True)[:5]
+    if ranked:
+        reasoning.append(ReasoningStep(
+            observation=f"Identified {len(ranked)} related file(s) to examine next",
+            evidence=", ".join(ranked[:3]),
+        ))
+    return ranked
+
+
+def _compute_confidence(
+    analysis: FileAnalysis,
+    deps: list,
+    dependents: list,
+    role: str,
+    reasoning: list[ReasoningStep],
+) -> float:
+    """Compute a confidence score (0.0-1.0) based on available signal strength."""
+    score = 0.0
+    if analysis.module_docstring:
+        score += 0.25
+    if analysis.symbols:
+        score += 0.20
+    if deps or dependents:
+        score += 0.20
+    if role != "unknown":
+        score += 0.20
+    if len(reasoning) > 3:
+        score += 0.15
+    return min(score, 1.0)

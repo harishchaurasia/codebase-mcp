@@ -34,8 +34,15 @@ def test_explain_file_after_analyze(tmp_codebase: Path) -> None:
     analyze_repo(str(tmp_codebase))
     result = explain_file("mypackage/utils.py")
     assert result["success"]
-    assert result["data"]["path"] == "mypackage/utils.py"
-    assert len(result["data"]["symbols"]) > 0
+    data = result["data"]
+    assert data["path"] == "mypackage/utils.py"
+    assert len(data["symbols"]) > 0
+    assert data["purpose"] != ""
+    assert data["role"] == "utility"
+    assert 0.0 <= data["confidence"] <= 1.0
+    assert isinstance(data["reasoning"], list)
+    assert len(data["reasoning"]) > 0
+    assert isinstance(data["next_files"], list)
 
 
 def test_explain_file_not_found(tmp_codebase: Path) -> None:
