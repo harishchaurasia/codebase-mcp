@@ -1,4 +1,4 @@
-"""Tool: suggest_files_for_task -- recommend files to examine/edit for a task."""
+"""Tool: suggest_files_for_task -- task decomposition and file mapping."""
 
 from __future__ import annotations
 
@@ -8,30 +8,32 @@ from codebase_mcp.tools.base import BaseTool, ToolMetadata, ToolResult
 
 
 class SuggestFilesForTaskTool(BaseTool):
-    """Combines keyword search with dependency analysis to suggest which files
-    an agent should look at (or modify) for a given task.  Each suggestion
-    includes the file's immediate dependency neighbourhood."""
+    """Decomposes a task into sub-goals, searches for relevant files per
+    sub-goal, and returns a structured plan with execution order and
+    confidence scores."""
 
     @property
     def metadata(self) -> ToolMetadata:
         return ToolMetadata(
             name="suggest_files_for_task",
             description=(
-                "Given a task description, suggest which files in the codebase an "
-                "agent should examine or edit.  Combines relevance search with "
-                "dependency graph analysis so the agent sees every file in the "
-                "affected neighbourhood, not just direct hits."
+                "Given a task description, decompose it into sub-goals, map each "
+                "sub-goal to relevant files using keyword search and dependency "
+                "analysis, and return a structured plan with per-sub-task results, "
+                "a deduplicated execution order, and confidence scores."
             ),
             trigger_keywords=[
                 "suggest", "recommend", "task", "implement", "feature",
                 "change", "modify", "edit", "which files", "where to",
                 "refactor", "bug", "fix",
+                "decompose", "subtask", "plan", "order", "steps",
             ],
             usage_examples=[
-                'suggest_files_for_task(task_description="Add rate limiting to the API", top_n=5)',
+                'suggest_files_for_task(task_description="Add JWT auth", top_n=5)',
                 "Which files should I change to add dark mode?",
+                "Break down the task: add rate limiting to the API",
             ],
-            capabilities=["planning", "search", "dependency-analysis"],
+            capabilities=["planning", "search", "dependency-analysis", "reasoning"],
         )
 
     def execute(self, **kwargs: Any) -> ToolResult:
@@ -40,11 +42,8 @@ class SuggestFilesForTaskTool(BaseTool):
         task_description: str = kwargs["task_description"]
         top_n: int = kwargs.get("top_n", 5)
         analyzer = get_analyzer()
-        suggestions = analyzer.suggest_files_for_task(task_description, top_n=top_n)
-        return ToolResult.ok(
-            self.name,
-            {"suggestions": [s.model_dump() for s in suggestions]},
-        )
+        plan = analyzer.suggest_files_for_task(task_description, top_n=top_n)
+        return ToolResult.ok(self.name, plan.model_dump())
 
 
 tool_instance = SuggestFilesForTaskTool()

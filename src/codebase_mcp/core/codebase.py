@@ -10,6 +10,7 @@ from codebase_mcp.analyzers.patterns import detect_patterns
 from codebase_mcp.analyzers.scanner import scan_directory
 from codebase_mcp.analyzers.search import find_relevant, find_relevant_refined
 from codebase_mcp.analyzers.summarizer import summarize_architecture
+from codebase_mcp.analyzers.task_decomposer import decompose_task
 from codebase_mcp.core.config import Settings
 from codebase_mcp.core.memory import MemoryStore
 from codebase_mcp.schemas.models import (
@@ -25,7 +26,9 @@ from codebase_mcp.schemas.models import (
     RefinedSearchResult,
     RepoMemory,
     ScanDiff,
+    SubTaskResult,
     SymbolSummary,
+    TaskPlan,
 )
 from codebase_mcp.utils.logging import get_logger
 
@@ -334,32 +337,103 @@ class CodebaseAnalyzer:
 
     def suggest_files_for_task(
         self, task_description: str, top_n: int = 5,
-    ) -> list[FileSuggestion]:
+    ) -> TaskPlan:
+        """Decompose a task into sub-goals and map each to relevant files."""
         self._ensure_loaded()
         assert self._graph is not None
 
+        subtasks = decompose_task(task_description)
         analyses = list(self._analyses_by_path.values())
-        search_results = find_relevant(task_description, analyses, top_n=top_n)
-        suggestions: list[FileSuggestion] = []
+        reasoning: list[ReasoningStep] = []
 
+        reasoning.append(ReasoningStep(
+            observation=f"Decomposed task into {len(subtasks)} sub-task(s)",
+            evidence=", ".join(st.label for st in subtasks),
+        ))
+
+        subtask_results: list[SubTaskResult] = []
+        for st in subtasks:
+            search_results = find_relevant(st.search_query, analyses, top_n=top_n)
+            files = self._build_suggestions(search_results)
+            max_score = search_results[0].score if search_results else 0.0
+            confidence = round(min(1.0, max_score / 3.0), 4) if max_score > 0 else 0.0
+            subtask_results.append(SubTaskResult(
+                subtask=st,
+                files=files,
+                confidence=confidence,
+            ))
+
+        exec_order = self._build_execution_order(subtask_results)
+        total_files = sum(len(sr.files) for sr in subtask_results)
+        reasoning.append(ReasoningStep(
+            observation=f"Found {total_files} file(s) across sub-tasks",
+            evidence=f"{len(exec_order)} unique file(s) in execution order",
+        ))
+
+        confidences = [sr.confidence for sr in subtask_results if sr.files]
+        overall = (
+            round(sum(confidences) / len(confidences), 4) if confidences else 0.0
+        )
+
+        return TaskPlan(
+            task_description=task_description,
+            subtasks=subtask_results,
+            execution_order=exec_order,
+            confidence=overall,
+            reasoning=reasoning,
+        )
+
+    def _build_suggestions(
+        self, search_results: list,
+    ) -> list[FileSuggestion]:
+        """Convert raw SearchResult objects into FileSuggestion with neighbours."""
+        assert self._graph is not None
+        suggestions: list[FileSuggestion] = []
         for sr in search_results:
             deps = self._graph.get_dependencies(sr.file_path)
             dependents = self._graph.get_dependents(sr.file_path)
-            neighbours = sorted({e.target for e in deps} | {e.source for e in dependents})
-
+            neighbours = sorted(
+                {e.target for e in deps} | {e.source for e in dependents},
+            )
             analysis = self._analyses_by_path.get(sr.file_path)
             reason = sr.context
             if analysis and analysis.module_docstring:
                 reason = analysis.module_docstring.strip().split("\n")[0]
-
             suggestions.append(FileSuggestion(
                 file_path=sr.file_path,
                 relevance_score=sr.score,
                 reason=reason,
                 related_files=neighbours,
             ))
-
         return suggestions
+
+    def _build_execution_order(
+        self, subtask_results: list[SubTaskResult],
+    ) -> list[str]:
+        """Deduplicate files and order by role priority."""
+        seen: set[str] = set()
+        buckets: dict[str, list[str]] = {}
+        for sr in subtask_results:
+            for f in sr.files:
+                if f.file_path in seen:
+                    continue
+                seen.add(f.file_path)
+                analysis = self._analyses_by_path.get(f.file_path)
+                role = "unknown"
+                if analysis:
+                    assert self._graph is not None
+                    dep_count = len(self._graph.get_dependents(f.file_path))
+                    role = _classify_role(
+                        f.file_path, analysis, dep_count, [],
+                    )
+                buckets.setdefault(role, []).append(f.file_path)
+
+        ordered: list[str] = []
+        for role in _ROLE_EXEC_ORDER:
+            ordered.extend(buckets.pop(role, []))
+        for remaining in sorted(buckets.values()):
+            ordered.extend(remaining)
+        return ordered
 
     def get_memory_status(self) -> dict:
         """Return information about the current memory / cache state."""
@@ -419,8 +493,13 @@ def _reassign_confidence(results: list[RefinedSearchResult]) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Heuristic reasoning helpers (module-level, used by explain_file)
+# Heuristic reasoning helpers (module-level, used by explain_file + suggest)
 # ---------------------------------------------------------------------------
+
+_ROLE_EXEC_ORDER = [
+    "config", "model", "core_logic", "utility",
+    "api", "entry_point", "test", "test_fixture", "unknown",
+]
 
 _ENTRY_POINT_NAMES = frozenset({
     "__main__.py", "main.py", "app.py", "server.py", "cli.py",

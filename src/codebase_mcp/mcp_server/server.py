@@ -83,14 +83,16 @@ def find_codebase_references(query: str, top_n: int = 10) -> dict:
 
 @mcp.tool()
 def suggest_files_for_task(task_description: str, top_n: int = 5) -> dict:
-    """Suggest which files to examine or edit for a given task.
+    """Decompose a task into sub-goals and suggest files for each.
 
-    Combines relevance search with dependency analysis so you see every file
-    in the affected neighbourhood.
+    Breaks the task into sub-tasks (e.g. find auth layer, find config, find
+    tests), searches for relevant files per sub-task, and returns a structured
+    plan with per-sub-task results, a deduplicated execution order sorted by
+    file role, and confidence scores.
 
     Args:
-        task_description: What you want to accomplish (e.g. "Add rate limiting").
-        top_n: Maximum number of suggestions (default 5).
+        task_description: What you want to accomplish (e.g. "Add JWT auth").
+        top_n: Maximum files per sub-task (default 5).
     """
     result = get_registry().execute(
         "suggest_files_for_task", task_description=task_description, top_n=top_n,

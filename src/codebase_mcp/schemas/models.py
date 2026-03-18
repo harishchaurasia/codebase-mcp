@@ -239,6 +239,43 @@ class FileSuggestion(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Task decomposition models
+# ---------------------------------------------------------------------------
+
+
+class SubTask(BaseModel):
+    """A decomposed sub-goal from a larger task."""
+
+    id: int = Field(ge=1, description="Execution priority (1 = first)")
+    label: str = Field(description="Human-readable sub-task description")
+    search_query: str = Field(description="Query used to find relevant files")
+    reasoning: str = Field(
+        default="", description="Why this sub-task was generated",
+    )
+
+
+class SubTaskResult(BaseModel):
+    """Files matched for a specific sub-task."""
+
+    subtask: SubTask
+    files: list[FileSuggestion] = Field(default_factory=list)
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+
+
+class TaskPlan(BaseModel):
+    """Decomposed task plan with sub-tasks, mapped files, and execution order."""
+
+    task_description: str
+    subtasks: list[SubTaskResult] = Field(default_factory=list)
+    execution_order: list[str] = Field(
+        default_factory=list,
+        description="Ordered list of unique file paths to examine/edit",
+    )
+    confidence: float = Field(default=0.0, ge=0.0, le=1.0)
+    reasoning: list[ReasoningStep] = Field(default_factory=list)
+
+
+# ---------------------------------------------------------------------------
 # Memory layer models
 # ---------------------------------------------------------------------------
 

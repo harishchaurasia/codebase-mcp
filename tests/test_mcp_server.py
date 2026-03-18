@@ -76,7 +76,12 @@ def test_suggest_files_for_task(tmp_codebase: Path) -> None:
     analyze_repo(str(tmp_codebase))
     result = suggest_files_for_task("add helper utilities")
     assert result["success"]
-    assert len(result["data"]["suggestions"]) > 0
+    data = result["data"]
+    assert "subtasks" in data
+    assert len(data["subtasks"]) > 0
+    assert "execution_order" in data
+    assert 0.0 <= data["confidence"] <= 1.0
+    assert isinstance(data["reasoning"], list)
 
 
 def test_list_tools_returns_metadata() -> None:

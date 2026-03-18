@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pytest
+
 from codebase_mcp.tools._context import reset_analyzer
 from codebase_mcp.tools.registry import ToolRegistry
 
@@ -88,10 +90,22 @@ def test_suggest_files_for_task_tool(tmp_codebase: Path) -> None:
         top_n=3,
     )
     assert result.success
-    suggestions = result.data["suggestions"]
-    assert len(suggestions) > 0
-    paths = [s["file_path"] for s in suggestions]
-    assert "mypackage/utils.py" in paths
+    data = result.data
+    assert "subtasks" in data
+    assert "execution_order" in data
+    assert "confidence" in data
+    assert "reasoning" in data
+    assert len(data["subtasks"]) > 0
+    assert 0.0 <= data["confidence"] <= 1.0
+    assert isinstance(data["reasoning"], list)
+    assert len(data["reasoning"]) > 0
+
+    all_files = [
+        f["file_path"]
+        for st in data["subtasks"]
+        for f in st["files"]
+    ]
+    assert "mypackage/utils.py" in all_files
 
 
 def test_explain_file_role_detection(tmp_codebase: Path) -> None:
@@ -136,10 +150,12 @@ def test_suggest_files_includes_related(tmp_codebase: Path) -> None:
         top_n=3,
     )
     assert result.success
-    for s in result.data["suggestions"]:
-        if s["file_path"] == "mypackage/utils.py":
-            assert len(s["related_files"]) > 0
-            break
+    for st in result.data["subtasks"]:
+        for f in st["files"]:
+            if f["file_path"] == "mypackage/utils.py":
+                assert len(f["related_files"]) > 0
+                return
+    pytest.fail("mypackage/utils.py not found in any subtask")
 
 
 def test_dependency_boost(tmp_codebase: Path) -> None:
@@ -156,3 +172,33 @@ def test_dependency_boost(tmp_codebase: Path) -> None:
     assert "mypackage/utils.py" in by_path
     utils_result = by_path["mypackage/utils.py"]
     assert utils_result["match_breakdown"]["dependency_boost"] > 0
+
+
+def test_task_decomposition_produces_subtasks(tmp_codebase: Path) -> None:
+    """A domain-specific task should produce multiple sub-tasks."""
+    reg = _fresh_registry()
+    reg.execute("analyze_repo", directory=str(tmp_codebase))
+    result = reg.execute(
+        "suggest_files_for_task",
+        task_description="add authentication middleware",
+        top_n=3,
+    )
+    assert result.success
+    subtasks = result.data["subtasks"]
+    assert len(subtasks) > 1
+    labels = [st["subtask"]["label"] for st in subtasks]
+    assert any("test" in lb.lower() for lb in labels)
+
+
+def test_execution_order_deduplicates(tmp_codebase: Path) -> None:
+    """execution_order should contain no duplicate file paths."""
+    reg = _fresh_registry()
+    reg.execute("analyze_repo", directory=str(tmp_codebase))
+    result = reg.execute(
+        "suggest_files_for_task",
+        task_description="modify the helper function",
+        top_n=5,
+    )
+    assert result.success
+    order = result.data["execution_order"]
+    assert len(order) == len(set(order))
