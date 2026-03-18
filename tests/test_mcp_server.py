@@ -1,90 +1,90 @@
-"""Integration tests for the MCP server tools."""
+"""Integration tests for the MCP server tool wrappers."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
+import codebase_mcp.mcp_server.server as server_mod
 from codebase_mcp.mcp_server.server import (
-    analyze_codebase,
+    analyze_repo,
     explain_file,
-    find_relevant_files,
-    get_architecture_summary,
-    get_dependency_graph,
-    get_file_dependencies,
+    find_codebase_references,
+    list_tools,
+    route_query,
+    suggest_files_for_task,
 )
 
 
-def _reset_analyzer() -> None:
-    """Reset the global analyzer between tests."""
-    import codebase_mcp.mcp_server.server as mod
-    mod._analyzer = None
+def _reset() -> None:
+    from codebase_mcp.tools._context import reset_analyzer
+
+    reset_analyzer()
+    server_mod._registry = None
 
 
-def test_analyze_codebase_returns_summary(tmp_codebase: Path) -> None:
-    _reset_analyzer()
-    result = analyze_codebase(str(tmp_codebase))
-    assert "total_files" in result
-    assert result["total_files"] > 0
-    assert "languages" in result
+def test_analyze_repo_returns_summary(tmp_codebase: Path) -> None:
+    _reset()
+    result = analyze_repo(str(tmp_codebase))
+    assert result["success"]
+    assert result["data"]["total_files"] > 0
 
 
-def test_get_architecture_summary_after_analyze(tmp_codebase: Path) -> None:
-    _reset_analyzer()
-    analyze_codebase(str(tmp_codebase))
-    summary = get_architecture_summary()
-    assert summary["total_files"] > 0
-    assert len(summary["languages"]) > 0
-
-
-def test_find_relevant_files_returns_results(tmp_codebase: Path) -> None:
-    _reset_analyzer()
-    analyze_codebase(str(tmp_codebase))
-    results = find_relevant_files("helper function")
-    assert len(results) > 0
-    paths = [r["file_path"] for r in results]
-    assert "mypackage/utils.py" in paths
-
-
-def test_explain_file_returns_info(tmp_codebase: Path) -> None:
-    _reset_analyzer()
-    analyze_codebase(str(tmp_codebase))
-    info = explain_file("mypackage/utils.py")
-    assert info["path"] == "mypackage/utils.py"
-    assert info["language"] == "python"
-    assert len(info["symbols"]) > 0
+def test_explain_file_after_analyze(tmp_codebase: Path) -> None:
+    _reset()
+    analyze_repo(str(tmp_codebase))
+    result = explain_file("mypackage/utils.py")
+    assert result["success"]
+    assert result["data"]["path"] == "mypackage/utils.py"
+    assert len(result["data"]["symbols"]) > 0
 
 
 def test_explain_file_not_found(tmp_codebase: Path) -> None:
-    _reset_analyzer()
-    analyze_codebase(str(tmp_codebase))
-    info = explain_file("nonexistent.py")
-    assert "error" in info
+    _reset()
+    analyze_repo(str(tmp_codebase))
+    result = explain_file("nonexistent.py")
+    assert not result["success"]
 
 
-def test_get_file_dependencies(tmp_codebase: Path) -> None:
-    _reset_analyzer()
-    analyze_codebase(str(tmp_codebase))
-    deps = get_file_dependencies("mypackage/main.py")
-    assert deps["file"] == "mypackage/main.py"
-    assert len(deps["imports"]) > 0
+def test_find_codebase_references(tmp_codebase: Path) -> None:
+    _reset()
+    analyze_repo(str(tmp_codebase))
+    result = find_codebase_references("helper function")
+    assert result["success"]
+    paths = [r["file_path"] for r in result["data"]["results"]]
+    assert "mypackage/utils.py" in paths
 
 
-def test_get_dependency_graph_full(tmp_codebase: Path) -> None:
-    _reset_analyzer()
-    analyze_codebase(str(tmp_codebase))
-    graph = get_dependency_graph()
-    assert "nodes" in graph
-    assert "edges" in graph
-    assert len(graph["nodes"]) > 0
+def test_suggest_files_for_task(tmp_codebase: Path) -> None:
+    _reset()
+    analyze_repo(str(tmp_codebase))
+    result = suggest_files_for_task("add helper utilities")
+    assert result["success"]
+    assert len(result["data"]["suggestions"]) > 0
 
 
-def test_get_dependency_graph_filtered(tmp_codebase: Path) -> None:
-    _reset_analyzer()
-    analyze_codebase(str(tmp_codebase))
-    graph = get_dependency_graph(filter_path="mypackage/sub")
-    assert "filter" in graph
-    assert all(
-        "mypackage/sub" in n
-        for n in graph["nodes"]
-        if n.startswith("mypackage/sub")
-    )
+def test_list_tools_returns_metadata() -> None:
+    _reset()
+    tools = list_tools()
+    assert isinstance(tools, list)
+    names = {t["name"] for t in tools}
+    assert "analyze_repo" in names
+    assert "explain_file" in names
+    assert "find_codebase_references" in names
+    assert "suggest_files_for_task" in names
+    for t in tools:
+        assert "trigger_keywords" in t
+        assert "usage_examples" in t
+
+
+def test_route_query_finds_matching_tools(tmp_codebase: Path) -> None:
+    _reset()
+    matches = route_query("analyze scan repository")
+    assert len(matches) > 0
+    assert matches[0]["name"] == "analyze_repo"
+
+
+def test_route_query_for_search(tmp_codebase: Path) -> None:
+    _reset()
+    matches = route_query("find files relevant to authentication")
+    names = [m["name"] for m in matches]
+    assert "find_codebase_references" in names

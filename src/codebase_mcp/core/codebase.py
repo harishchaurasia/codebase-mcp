@@ -14,7 +14,11 @@ from codebase_mcp.schemas.models import (
     ArchitectureSummary,
     DependencyGraph,
     FileAnalysis,
+    FileDependencyInfo,
+    FileExplanation,
+    FileSuggestion,
     SearchResult,
+    SymbolSummary,
 )
 from codebase_mcp.utils.logging import get_logger
 
@@ -37,10 +41,7 @@ class CodebaseAnalyzer:
         return self._root is not None and len(self._analyses) > 0
 
     def analyze(self, root: str) -> ArchitectureSummary:
-        """Scan and fully analyze the codebase rooted at *root*.
-
-        Returns the architecture summary. Results are cached for subsequent queries.
-        """
+        """Scan and fully analyze the codebase rooted at *root*."""
         self._root = Path(root).resolve()
         logger.info("analyzing codebase", root=str(self._root))
 
@@ -73,55 +74,46 @@ class CodebaseAnalyzer:
         self._ensure_loaded()
         return find_relevant(query, self._analyses, top_n=top_n)
 
-    def explain_file(self, file_path: str) -> dict:
+    def explain_file(self, file_path: str) -> FileExplanation | None:
         """Return a structured explanation of what a file does."""
         self._ensure_loaded()
         assert self._graph is not None
 
         analysis = self._analyses_by_path.get(file_path)
         if analysis is None:
-            return {"error": f"File not found in analysis: {file_path}"}
+            return None
 
         deps = self._graph.get_dependencies(file_path)
         dependents = self._graph.get_dependents(file_path)
 
-        symbols_summary = [
-            {
-                "name": s.name,
-                "kind": s.kind.value,
-                "line": s.line_number,
-                "docstring": s.docstring,
-            }
-            for s in analysis.symbols
-        ]
+        return FileExplanation(
+            path=analysis.info.path,
+            language=analysis.info.language.value,
+            lines=analysis.info.line_count,
+            module_docstring=analysis.module_docstring,
+            symbols=[
+                SymbolSummary(
+                    name=s.name,
+                    kind=s.kind.value,
+                    line=s.line_number,
+                    docstring=s.docstring,
+                )
+                for s in analysis.symbols
+            ],
+            imports_from=[e.target for e in deps],
+            imported_by=[e.source for e in dependents],
+        )
 
-        return {
-            "path": analysis.info.path,
-            "language": analysis.info.language.value,
-            "lines": analysis.info.line_count,
-            "module_docstring": analysis.module_docstring,
-            "symbols": symbols_summary,
-            "imports_from": [e.target for e in deps],
-            "imported_by": [e.source for e in dependents],
-        }
-
-    def get_file_dependencies(self, file_path: str) -> dict:
+    def get_file_dependencies(self, file_path: str) -> FileDependencyInfo:
         """Return what a file imports and what imports it."""
         self._ensure_loaded()
         assert self._graph is not None
 
-        deps = self._graph.get_dependencies(file_path)
-        dependents = self._graph.get_dependents(file_path)
-
-        return {
-            "file": file_path,
-            "imports": [
-                {"target": e.target, "names": e.imported_names} for e in deps
-            ],
-            "imported_by": [
-                {"source": e.source, "names": e.imported_names} for e in dependents
-            ],
-        }
+        return FileDependencyInfo(
+            file=file_path,
+            imports=self._graph.get_dependencies(file_path),
+            imported_by=self._graph.get_dependents(file_path),
+        )
 
     def get_dependency_graph(self, filter_path: str | None = None) -> dict:
         """Return the full or filtered dependency graph as a serializable dict."""
@@ -148,8 +140,46 @@ class CodebaseAnalyzer:
             "edges": [e.model_dump() for e in self._graph.edges],
         }
 
+    def suggest_files_for_task(
+        self,
+        task_description: str,
+        top_n: int = 5,
+    ) -> list[FileSuggestion]:
+        """Suggest files an agent should examine or edit for a given task.
+
+        Combines keyword search with dependency analysis: each hit is enriched
+        with its immediate dependency neighbourhood so the agent sees the full
+        context it needs.
+        """
+        self._ensure_loaded()
+        assert self._graph is not None
+
+        search_results = find_relevant(task_description, self._analyses, top_n=top_n)
+        suggestions: list[FileSuggestion] = []
+
+        for sr in search_results:
+            deps = self._graph.get_dependencies(sr.file_path)
+            dependents = self._graph.get_dependents(sr.file_path)
+            neighbours = sorted({e.target for e in deps} | {e.source for e in dependents})
+
+            analysis = self._analyses_by_path.get(sr.file_path)
+            reason = sr.context
+            if analysis and analysis.module_docstring:
+                reason = analysis.module_docstring.strip().split("\n")[0]
+
+            suggestions.append(
+                FileSuggestion(
+                    file_path=sr.file_path,
+                    relevance_score=sr.score,
+                    reason=reason,
+                    related_files=neighbours,
+                )
+            )
+
+        return suggestions
+
     def _ensure_loaded(self) -> None:
         if not self.is_loaded:
             raise RuntimeError(
-                "No codebase loaded. Call 'analyze_codebase' first with a directory path."
+                "No codebase loaded. Call 'analyze_repo' first with a directory path."
             )

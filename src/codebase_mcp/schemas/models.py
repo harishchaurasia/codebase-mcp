@@ -138,3 +138,49 @@ class SearchResult(BaseModel):
     score: float = Field(ge=0.0)
     matched_symbols: list[str] = Field(default_factory=list)
     context: str = Field(default="", description="Snippet or summary of why this matched")
+
+
+# ---------------------------------------------------------------------------
+# Structured tool I/O models (agentic layer)
+# ---------------------------------------------------------------------------
+
+
+class SymbolSummary(BaseModel):
+    """Compact representation of a code symbol for tool output."""
+
+    name: str
+    kind: str
+    line: int
+    docstring: str | None = None
+
+
+class FileExplanation(BaseModel):
+    """Structured explanation of a single file's role and contents."""
+
+    path: str
+    language: str
+    lines: int
+    module_docstring: str | None = None
+    symbols: list[SymbolSummary] = Field(default_factory=list)
+    imports_from: list[str] = Field(default_factory=list)
+    imported_by: list[str] = Field(default_factory=list)
+
+
+class FileDependencyInfo(BaseModel):
+    """What a file imports and what imports it."""
+
+    file: str
+    imports: list[DependencyEdge] = Field(default_factory=list)
+    imported_by: list[DependencyEdge] = Field(default_factory=list)
+
+
+class FileSuggestion(BaseModel):
+    """A file suggested for a task, with rationale."""
+
+    file_path: str
+    relevance_score: float = Field(ge=0.0)
+    reason: str = Field(default="")
+    related_files: list[str] = Field(
+        default_factory=list,
+        description="Files tightly coupled to this one (deps + dependents)",
+    )
