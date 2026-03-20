@@ -62,8 +62,25 @@ def main(codebase_path: str) -> None:
             print(json.dumps(explanation.data, indent=2)[:500])
 
 
+def agent_loop_demo(codebase_path: str) -> None:
+    """Run the minimal agent loop against a codebase."""
+    from codebase_mcp.agent import AgentLoopConfig, run_agent_loop
+
+    result = run_agent_loop(
+        goal="find where configuration is defined",
+        directory=codebase_path,
+        config=AgentLoopConfig(max_iterations=6),
+    )
+
+    print(f"\n=== Agent Loop (done={result.done}, reason={result.stop_reason}) ===")
+    for step in result.trace:
+        print(f"  [{step.iteration}] {step.selected_tool}: {step.observation}")
+    print(f"\n  Final candidate files: {result.final_result.get('candidate_files', [])}")
+
+
 if __name__ == "__main__":
     if len(sys.argv) < 2:
         print(f"Usage: {sys.argv[0]} <codebase-path>")
         sys.exit(1)
     main(sys.argv[1])
+    agent_loop_demo(sys.argv[1])

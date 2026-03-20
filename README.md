@@ -5,6 +5,8 @@ An **agent-capable MCP server** that lets AI tools deeply understand a software 
 ## Architecture
 
 ```
+  Agent Loop          ← plan → select → execute → observe → evaluate
+        │
 MCP Transport (stdio / HTTP)
         │
    MCP Server        ← thin wrapper, auto-registers tools
@@ -44,6 +46,7 @@ MCP Transport (stdio / HTTP)
 - **AST analysis** -- extracts classes, functions, variables, imports, and docstrings from Python files
 - **Architecture summary** -- language breakdown, top modules, entry points, most-imported files
 - **Keyword search** -- TF-IDF scoring over paths, symbol names, and docstrings
+- **Minimal agent loop** -- iteratively plans, selects tools, executes, observes, and stops when done; fully rule-based with configurable max iterations and early-stop callbacks
 
 ## Quick Start
 
@@ -76,6 +79,24 @@ print(matches[0].name)  # -> "find_codebase_references"
 result = registry.execute("analyze_repo", directory="/path/to/project")
 print(result.data["total_files"])
 ```
+
+### Run the minimal agent loop (no MCP needed)
+
+```python
+from codebase_mcp.agent import AgentLoopConfig, run_agent_loop
+
+result = run_agent_loop(
+    goal="find where configuration is defined",
+    directory="/path/to/project",
+    config=AgentLoopConfig(max_iterations=6),
+)
+
+for step in result.trace:
+    print(f"[{step.iteration}] {step.selected_tool}: {step.observation}")
+print(result.final_result["candidate_files"])
+```
+
+The loop automatically plans, selects tools, executes, observes, and evaluates progress until the goal is complete or the iteration limit is reached. Pass a `should_stop` callback for custom early-stop logic.
 
 See `examples/client_usage.py` for a full walkthrough.
 
@@ -148,6 +169,9 @@ ToolMetadata(
 
 ```
 src/codebase_mcp/
+├── agent/
+│   ├── __init__.py         # Public API (run_agent_loop, models)
+│   └── loop.py             # Heuristic plan/select/execute/observe loop
 ├── tools/                  # Agentic tool layer
 │   ├── base.py             # BaseTool, ToolMetadata, ToolResult
 │   ├── registry.py         # ToolRegistry (discover, route, execute)
@@ -180,7 +204,7 @@ src/codebase_mcp/
 ## Development
 
 ```bash
-# Run tests (63 tests)
+# Run tests (86 tests)
 python -m pytest tests/ -v
 
 # Lint
